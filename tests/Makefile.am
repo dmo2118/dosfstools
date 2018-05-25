@@ -4,16 +4,18 @@ if AUTOMAKE_TEST_COMPAT
 TESTS_ENVIRONMENT = $(AM_TESTS_ENVIRONMENT)
 endif
 
-TESTS = referenceFAT12.mkfs              \
-	referenceFAT16.mkfs              \
-	referenceFAT32.mkfs              \
-	check-bad_names.fsck             \
-	check-chain_to_free_cluster.fsck \
-	check-chain_too_long.fsck        \
-	check-chain_to_other_file.fsck   \
-	check-circular_chain.fsck        \
-	check-duplicate_names.fsck       \
-	check-dot_entries.fsck           \
+TESTS = referenceFAT12.mkfs                    \
+	referenceFAT16.mkfs                    \
+	referenceFAT32.mkfs                    \
+	check-backup_boot_sector_mismatch.fsck \
+	check-bad_names.fsck                   \
+	check-bad_boot_sector.fsck             \
+	check-chain_to_free_cluster.fsck       \
+	check-chain_too_long.fsck              \
+	check-chain_to_other_file.fsck         \
+	check-circular_chain.fsck              \
+	check-duplicate_names.fsck             \
+	check-dot_entries.fsck                 \
 	label-fat32_mkdosfs_label1_dosfslabel_empty.label          \
 	label-fat32_mkdosfs_label1_dosfslabel_label2.label         \
 	label-fat32_mkdosfs_label1_dosfslabel_NO_NAME.label        \
@@ -34,27 +36,29 @@ TESTS = referenceFAT12.mkfs              \
 	label-fat32_xp_none.label
 
 
-XFAIL_TESTS = check-dot_entries.fsck
+XFAIL_TESTS = check-dot_entries.fsck check-backup_boot_sector_mismatch.fsck
 
 TEST_EXTENSIONS = .mkfs .fsck .label
 MKFS_LOG_COMPILER = $(srcdir)/test-mkfs
 FSCK_LOG_COMPILER = $(srcdir)/test-fsck
 LABEL_LOG_COMPILER = $(srcdir)/test-label
 
-dist_check_DATA = test-mkfs test-fsck test-label   \
-		  referenceFAT12.mkfs              \
-		  referenceFAT12.xxd               \
-		  referenceFAT16.mkfs              \
-		  referenceFAT16.xxd               \
-		  referenceFAT32.mkfs              \
-		  referenceFAT32.xxd               \
-		  check-bad_names.fsck             \
-		  check-chain_to_free_cluster.fsck \
-		  check-chain_too_long.fsck        \
-		  check-chain_to_other_file.fsck   \
-		  check-circular_chain.fsck        \
-		  check-duplicate_names.fsck       \
-		  check-dot_entries.fsck           \
+dist_check_DATA = test-mkfs test-fsck test-label         \
+		  referenceFAT12.mkfs                    \
+		  referenceFAT12.xxd                     \
+		  referenceFAT16.mkfs                    \
+		  referenceFAT16.xxd                     \
+		  referenceFAT32.mkfs                    \
+		  referenceFAT32.xxd                     \
+		  check-backup_boot_sector_mismatch.fsck \
+		  check-bad_names.fsck                   \
+		  check-bad_boot_sector.fsck             \
+		  check-chain_to_free_cluster.fsck       \
+		  check-chain_too_long.fsck              \
+		  check-chain_to_other_file.fsck         \
+		  check-circular_chain.fsck              \
+		  check-duplicate_names.fsck             \
+		  check-dot_entries.fsck                 \
 		  label-fat32_mkdosfs_label1_dosfslabel_empty.label          \
 		  label-fat32_mkdosfs_label1_dosfslabel_empty.xxd            \
 		  label-fat32_mkdosfs_label1_dosfslabel_label2.label         \
