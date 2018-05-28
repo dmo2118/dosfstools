@@ -4,7 +4,8 @@ if AUTOMAKE_TEST_COMPAT
 TESTS_ENVIRONMENT = $(AM_TESTS_ENVIRONMENT)
 endif
 
-TESTS = referenceFAT12.mkfs                    \
+TESTS = test-fs_write                          \
+	referenceFAT12.mkfs                    \
 	referenceFAT16.mkfs                    \
 	referenceFAT32.mkfs                    \
 	check-backup_boot_sector_mismatch.fsck \
@@ -36,6 +37,7 @@ TESTS = referenceFAT12.mkfs                    \
 	label-fat32_xp_none.label
 
 
+CLEANFILES = test-fs_write.img
 XFAIL_TESTS = check-dot_entries.fsck check-backup_boot_sector_mismatch.fsck
 
 TEST_EXTENSIONS = .mkfs .fsck .label
@@ -95,3 +97,6 @@ dist_check_DATA = test-mkfs test-fsck test-label         \
 		  label-fat32_xp_none_mlabel_label1.xxd                      \
 		  label-fat32_xp_none.label                                  \
 		  label-fat32_xp_none.xxd
+
+check_PROGRAMS = test-fs_write
+test_fs_write_LDADD = ../src/io.o ../src/common.o

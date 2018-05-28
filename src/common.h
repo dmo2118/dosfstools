@@ -48,6 +48,10 @@ void *alloc(int size);
 /* mallocs SIZE bytes and returns a pointer to the data. Terminates the program
    if malloc fails. */
 
+void *xrealloc(void *ptr, size_t size);
+
+/* Like alloc(), but with realloc instead of malloc. */
+
 void *qalloc(void **root, int size);
 
 /* Like alloc, but registers the data area in a list described by ROOT. */

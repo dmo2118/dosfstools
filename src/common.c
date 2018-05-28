@@ -84,6 +84,14 @@ void *alloc(int size)
     return NULL;		/* for GCC */
 }
 
+void *xrealloc(void *ptr, size_t size)
+{
+    if ((ptr = realloc(ptr, size)))
+	return ptr;
+    pdie("realloc");
+    return NULL;
+}
+
 void *qalloc(void **root, int size)
 {
     LINK *link;

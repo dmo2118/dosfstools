@@ -52,7 +52,7 @@ typedef struct _change {
     struct _change *next;
 } CHANGE;
 
-static CHANGE *changes, *last;
+static CHANGE *changes;
 static int fd, did_change = 0;
 
 
@@ -62,7 +62,7 @@ void fs_open(const char *path, int rw)
 	perror("open");
 	exit(6);
     }
-    changes = last = NULL;
+    changes = NULL;
     did_change = 0;
 }
 
@@ -111,9 +111,10 @@ int fs_test(off_t pos, int size)
     return okay;
 }
 
-void fs_write(off_t pos, int size, void *data)
+void fs_write(off_t pos, int size, const void *data)
 {
-    CHANGE *new;
+    CHANGE *new = NULL, *suffix = NULL, **walk_p;
+    off_t end = pos + size;
     int did;
 
     if (write_immed) {
@@ -126,15 +127,55 @@ void fs_write(off_t pos, int size, void *data)
 	    pdie("Write %d bytes at %lld", size, (long long)pos);
 	die("Wrote %d bytes instead of %d at %lld", did, size, (long long)pos);
     }
-    new = alloc(sizeof(CHANGE));
-    new->pos = pos;
-    memcpy(new->data = alloc(new->size = size), data, size);
-    new->next = NULL;
-    if (last)
-	last->next = new;
-    else
-	changes = new;
-    last = new;
+
+    walk_p = &changes;
+    while (*walk_p) {
+	CHANGE *walk = *walk_p;
+	if (walk->pos >= pos && walk->pos + walk->size <= pos + size) {
+	    *walk_p = walk->next;
+	    free (walk->data);
+	    free (walk);
+	} else if (walk->pos + walk->size >= pos && walk->pos <= pos) {
+	    /* Text for a prefix before a suffix. */
+	    *walk_p = walk->next;
+	    new = walk;
+	} else if (walk->pos <= pos + size && walk->pos + walk->size >= pos) {
+	    *walk_p = walk->next;
+	    suffix = walk;
+	} else {
+	    walk_p = &walk->next;
+	}
+    }
+
+    if (suffix) {
+	end = suffix->pos + suffix->size;
+    } else if (new) {
+	off_t end0 = new->pos + new->size;
+	if (end0 > end)
+	    end = end0;
+    }
+
+    if (!new) {
+	new = alloc(sizeof(CHANGE));
+	new->pos = pos;
+	new->data = NULL;
+    }
+
+    new->size = end - new->pos;
+    new->data = xrealloc(new->data, new->size);
+
+    memcpy((char *)new->data + (pos - new->pos), data, size);
+
+    if (suffix) {
+	memcpy((char *)new->data + (pos + size - new->pos),
+	       (char *)suffix->data + (pos + size - suffix->pos),
+	       end - (pos + size));
+	free(suffix->data);
+	free(suffix);
+    }
+
+    new->next = changes;
+    changes = new;
 }
 
 static void fs_flush(void)
