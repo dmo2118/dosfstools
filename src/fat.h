@@ -68,6 +68,10 @@ void fix_bad(DOS_FS * fs);
 
 /* Scans the disk for currently unused bad clusters and marks them as bad. */
 
+uint32_t alloc_cluster(DOS_FS * fs, uint32_t prev);
+
+/* Allocates a single cluster. Terminates the program if the disk is full. */
+
 void reclaim_free(DOS_FS * fs);
 
 /* Marks all allocated, but unused clusters as free. */

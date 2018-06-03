@@ -200,9 +200,10 @@ Usage error.
 \fBfsck.fat\fR did not access the filesystem.
 .\" ----------------------------------------------------------------------------
 .SH FILES
-.IP "fsck0000.rec, fsck0001.rec, ..." 4
+.IP "FSCK0000.DIR, FSCK0001.DIR, ..." 4
 When recovering from a corrupted filesystem, \fBfsck.fat\fR dumps recovered data
-into files named 'fsckNNNN.rec' in the top level directory of the filesystem.
+into directories named 'FSCK####.DIR' in the top level directory of the
+filesystem.
 .\" ----------------------------------------------------------------------------
 .SH BUGS
 Does not create . and .. files where necessary.

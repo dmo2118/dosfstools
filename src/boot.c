@@ -80,20 +80,7 @@ off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int ge
 	     * after previous one */
 	    if (!prev)
 		die("Root directory has no cluster allocated!");
-	    for (clu_num = prev + 1; clu_num != prev; clu_num++) {
-		FAT_ENTRY entry;
-
-		if (clu_num >= fs->data_clusters + 2)
-		    clu_num = 2;
-		get_fat(&entry, fs->fat, clu_num, fs);
-		if (!entry.value)
-		    break;
-	    }
-	    if (clu_num == prev)
-		die("Root directory full and no free cluster");
-	    set_fat(fs, prev, clu_num);
-	    set_fat(fs, clu_num, -1);
-	    set_owner(fs, clu_num, get_owner(fs, fs->root_cluster));
+	    clu_num = alloc_cluster (fs, prev);
 	    /* clear new cluster */
 	    memset(&d2, 0, sizeof(d2));
 	    offset = cluster_start(fs, clu_num);

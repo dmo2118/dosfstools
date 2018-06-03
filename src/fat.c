@@ -416,6 +416,69 @@ static void tag_free(DOS_FS * fs, DOS_FILE * owner, uint32_t *num_refs,
     }
 }
 
+static uint32_t find_cluster(DOS_FS *fs, uint32_t first, uint32_t last)
+{
+    for (; first != last; first++) {
+	FAT_ENTRY entry;
+	get_fat(&entry, fs->fat, first, fs);
+	if (!entry.value)
+	    break;
+    }
+    return first;
+}
+
+/**
+ * Allocates a cluster and optionally attaches it to the end of a chain.
+ *
+ * @param[in,out]   fs             Information about the filesystem
+ * @param[in]       prev           Previous cluster in the chain.
+ */
+uint32_t alloc_cluster(DOS_FS * fs, uint32_t prev)
+{
+    uint32_t clu_num = find_cluster(fs, prev + 1, fs->data_clusters + 2);
+    if (clu_num == fs->data_clusters + 2) {
+	clu_num = find_cluster(fs, 2, prev);
+	if (clu_num == prev)
+	    die("No space left on device");
+    }
+    set_fat(fs, prev, clu_num);
+    set_fat(fs, clu_num, -1);
+    set_owner(fs, clu_num, get_owner(fs, prev));
+    return clu_num;
+}
+
+static uint32_t new_chain(DOS_FS * fs, DOS_FILE * owner)
+{
+    uint32_t clu_num = find_cluster(fs, 2, fs->data_clusters + 2);
+    if (clu_num == fs->data_clusters + 2)
+	die("No space left on device");
+    set_fat(fs, clu_num, -1);
+    set_owner(fs, clu_num, owner);
+    return clu_num;
+}
+
+static DIR_ENT *next_ent(DOS_FS * fs, DIR_ENT *ents, int *ents_size,
+                         uint32_t *ents_cluster)
+{
+    if (*ents_size == fs->cluster_size / sizeof(DIR_ENT)) {
+	fs_write(cluster_start(fs, *ents_cluster), fs->cluster_size,
+	         ents);
+
+	*ents_cluster = alloc_cluster(fs, *ents_cluster);
+	*ents_size = 0;
+    }
+    return &ents[*ents_size];
+}
+
+static void finish_ents(DOS_FS * fs, DIR_ENT * ents, int ents_size,
+                        uint32_t ents_cluster)
+{
+    if (!ents_cluster)
+	return;
+    memset(ents + ents_size, 0, fs->cluster_size - sizeof(DIR_ENT) * ents_size);
+    fs_write(cluster_start(fs, ents_cluster), fs->cluster_size, ents);
+}
+
 /**
  * Recover orphan chains to files, handling any cycles or cross-links.
  *
@@ -423,12 +486,13 @@ static void tag_free(DOS_FS * fs, DOS_FILE * owner, uint32_t *num_refs,
  */
 void reclaim_file(DOS_FS * fs)
 {
-    DOS_FILE orphan;
-    int reclaimed, files;
+    DOS_FILE orphan, fsck_dir;
+    int reclaimed, files, ents_size;
     int changed = 0;
-    uint32_t i, next, walk;
+    uint32_t i, next, walk, ents_cluster = 0;
     uint32_t *num_refs = NULL;	/* Only for orphaned clusters */
     uint32_t total_num_clusters;
+    DIR_ENT *ents;
 
     if (verbose)
 	printf("Reclaiming unconnected clusters.\n");
@@ -494,23 +558,50 @@ void reclaim_file(DOS_FS * fs)
 
     /* Now we can start recovery */
     files = reclaimed = 0;
+    ents = alloc(fs->cluster_size);
     for (i = 2; i < total_num_clusters; i++)
 	/* If this cluster is the head of an orphan chain... */
 	if (get_owner(fs, i) == &orphan && !num_refs[i]) {
-	    DIR_ENT de;
-	    off_t offset;
+	    uint32_t size;
+	    DIR_ENT *de_file;
+	    char expanded[12];
+	    if (!(files % 10000)) {
+		DIR_ENT de_dots[2] = {
+		    {MSDOS_DOT, ATTR_DIR},
+		    {MSDOS_DOTDOT, ATTR_DIR}
+		};
+		DIR_ENT de;
+		finish_ents(fs, ents, ents_size, ents_cluster);
+		off_t offset = alloc_rootdir_entry(fs, &de, "FSCK%04dDIR", 1);
+		ents_cluster = new_chain(fs, &fsck_dir);
+		ents_size = 2;
+		de.start = htole16(ents_cluster & 0xffff);
+		de.starthi = htole16(ents_cluster >> 16);
+		de.attr = ATTR_DIR;
+		fs_write(offset, sizeof(de), &de);
+
+		memcpy(ents, de_dots, sizeof(de_dots));
+		ents[0].start = htole16(ents_cluster & 0xffff);
+		ents[0].starthi = htole16(ents_cluster >> 16);
+	    }
+	    de_file = next_ent(fs, ents, &ents_size, &ents_cluster);
+	    memset(de_file, 0, sizeof(*de_file));
+	    sprintf(expanded, "FSCK%04dREC", files % 10000);
+	    memcpy(de_file->name, expanded, MSDOS_NAME);
+	    de_file->start = htole16(i & 0xffff);
+	    de_file->starthi = htole16(i >> 16);
 	    files++;
-	    offset = alloc_rootdir_entry(fs, &de, "FSCK%04dREC", 1);
-	    de.start = htole16(i & 0xffff);
-	    if (fs->fat_bits == 32)
-		de.starthi = htole16(i >> 16);
+	    ents_size++;
+	    size = 0;
 	    for (walk = i; walk > 0 && walk != -1;
 		 walk = next_cluster(fs, walk)) {
-		de.size = htole32(le32toh(de.size) + fs->cluster_size);
-		reclaimed++;
+		size++;
 	    }
-	    fs_write(offset, sizeof(DIR_ENT), &de);
+	    reclaimed += size;
+	    de_file->size = htole32(size * fs->cluster_size);
 	}
+    finish_ents(fs, ents, ents_size, ents_cluster);
+    free(ents);
     if (reclaimed)
 	printf("Reclaimed %d unused cluster%s (%llu bytes) in %d chain%s.\n",
 	       reclaimed, reclaimed == 1 ? "" : "s",
