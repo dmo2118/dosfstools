@@ -29,4 +29,10 @@ int scan_root(DOS_FS * fs);
    for all the details. Returns a non-zero integer if the filesystem has to
    be checked again. */
 
+void reclaim_file(DOS_FS * fs);
+
+/* Scans the FAT for chains of allocated, but unused clusters and creates files
+   for them in the root directory. Also tries to fix all inconsistencies (e.g.
+   loops, shared clusters, etc.) in the process. */
+
 #endif

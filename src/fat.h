@@ -68,6 +68,10 @@ void fix_bad(DOS_FS * fs);
 
 /* Scans the disk for currently unused bad clusters and marks them as bad. */
 
+uint32_t find_cluster(DOS_FS *fs, uint32_t first, uint32_t last);
+
+/* Finds a free cluster in the range [first, last). */
+
 uint32_t alloc_cluster(DOS_FS * fs, uint32_t prev);
 
 /* Allocates a single cluster. Terminates the program if the disk is full. */
@@ -75,12 +79,6 @@ uint32_t alloc_cluster(DOS_FS * fs, uint32_t prev);
 void reclaim_free(DOS_FS * fs);
 
 /* Marks all allocated, but unused clusters as free. */
-
-void reclaim_file(DOS_FS * fs);
-
-/* Scans the FAT for chains of allocated, but unused clusters and creates files
-   for them in the root directory. Also tries to fix all inconsistencies (e.g.
-   loops, shared clusters, etc.) in the process. */
 
 uint32_t update_free(DOS_FS * fs);
 
