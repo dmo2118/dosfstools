@@ -29,7 +29,13 @@ int scan_root(DOS_FS * fs);
    for all the details. Returns a non-zero integer if the filesystem has to
    be checked again. */
 
-void reclaim_file(DOS_FS * fs);
+int scan_new_file(DOS_FS * fs, off_t offset);
+
+/* Scans a single new file or a directory and its subdirectories. Returns a
+   non-zero integer if the specified file or directory needs to be checked
+   again. scan_root() must be called first. */
+
+void reclaim_file(DOS_FS * fs, int salvage_dirs);
 
 /* Scans the FAT for chains of allocated, but unused clusters and creates files
    for them in the root directory. Also tries to fix all inconsistencies (e.g.

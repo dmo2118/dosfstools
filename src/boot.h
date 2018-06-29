@@ -36,12 +36,19 @@ const char *pretty_label(const char *label);
 /* Reads the boot sector from the currently open device and initializes *FS */
 
 
+off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
+                      int gen_name, uint32_t dir_cluster);
+
+/* Allocate a free slot in the directory starting at dir_cluster for a new file.
+   If gen_name is true, the file name is constructed after 'pattern', which must
+   include a %d type format for printf and expand to exactly 11 characters. The
+   name actually used is written into the 'de' structure, the rest of *de is
+   cleared. The offset returned is to where in the filesystem the entry belongs.
+ */
+
+
 off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int gen_name);
 
-/* Allocate a free slot in the root directory for a new file. If gen_name is
-   true, the file name is constructed after 'pattern', which must include a %d
-   type format for printf and expand to exactly 11 characters. The name
-   actually used is written into the 'de' structure, the rest of *de is cleared.
-   The offset returned is to where in the filesystem the entry belongs. */
+/* Like alloc_dir_entry, but in the root directory. */
 
 #endif

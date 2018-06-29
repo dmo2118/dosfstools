@@ -23,6 +23,9 @@
 #ifndef _FAT_H
 #define _FAT_H
 
+#define FILE_ORPHAN ((DOS_FILE *)1)
+#define FILE_FSCK_DIR ((DOS_FILE *)2)
+
 void read_fat(DOS_FS * fs);
 
 /* Loads the FAT of the filesystem described by FS. Initializes the FAT,

@@ -71,6 +71,7 @@ static void usage(char *name, int exitval)
 	    DEFAULT_DOS_CODEPAGE);
     fprintf(stderr, "  -d PATH         drop file with name PATH (can be given multiple times)\n");
     fprintf(stderr, "  -f              salvage unused chains to files\n");
+    fprintf(stderr, "  -F              salvage unused chains to directories\n");
     fprintf(stderr, "  -l              list path names\n");
     fprintf(stderr, "  -n              no-op, check non-interactively without changing\n");
     fprintf(stderr, "  -p              same as -a, for compat with other *fsck\n");
@@ -91,7 +92,7 @@ static void usage(char *name, int exitval)
 int main(int argc, char **argv)
 {
     DOS_FS fs;
-    int salvage_files, verify, c;
+    int salvage_files, salvage_dirs, verify, c;
     uint32_t free_clusters = 0;
     struct termios tio;
 
@@ -110,11 +111,11 @@ int main(int argc, char **argv)
     }
 
     memset(&fs, 0, sizeof(fs));
-    salvage_files = verify = 0;
+    salvage_files = salvage_dirs = verify = 0;
     rw = interactive = 1;
     check_atari();
 
-    while ((c = getopt_long(argc, argv, "Aac:d:bflnprStu:vVwy",
+    while ((c = getopt_long(argc, argv, "Aac:d:bFflnprStu:vVwy",
 				    long_options, NULL)) != -1)
 	switch (c) {
 	case 'A':		/* toggle Atari format */
@@ -137,6 +138,10 @@ int main(int argc, char **argv)
 	    break;
 	case 'd':
 	    file_add(optarg, fdt_drop);
+	    break;
+	case 'F':
+	    salvage_dirs = 1;
+	    salvage_files = 1;
 	    break;
 	case 'f':
 	    salvage_files = 1;
@@ -213,7 +218,7 @@ int main(int argc, char **argv)
     if (test)
 	fix_bad(&fs);
     if (salvage_files)
-	reclaim_file(&fs);
+	reclaim_file(&fs, salvage_dirs);
     else
 	reclaim_free(&fs);
     free_clusters = update_free(&fs);

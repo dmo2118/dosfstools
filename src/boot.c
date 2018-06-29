@@ -49,16 +49,22 @@
 
 off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int gen_name)
 {
+    return alloc_dir_entry(fs, de, pattern, gen_name, fs->root_cluster);
+}
+
+off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
+                      int gen_name, uint32_t dir_cluster)
+{
     static int curr_num = 0;
     off_t offset;
 
-    if (fs->root_cluster) {
+    if (dir_cluster) {
 	DIR_ENT d2;
 	int i = 0, got = 0;
 	uint32_t clu_num, prev = 0;
 	off_t offset2;
 
-	clu_num = fs->root_cluster;
+	clu_num = dir_cluster;
 	offset = cluster_start(fs, clu_num);
 	while (clu_num > 0 && clu_num != -1) {
 	    fs_read(offset, sizeof(DIR_ENT), &d2);
@@ -93,7 +99,7 @@ off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int ge
 		char expanded[12];
 		sprintf(expanded, pattern, curr_num);
 		memcpy(de->name, expanded, MSDOS_NAME);
-		clu_num = fs->root_cluster;
+		clu_num = dir_cluster;
 		i = 0;
 		offset2 = cluster_start(fs, clu_num);
 		while (clu_num > 0 && clu_num != -1) {

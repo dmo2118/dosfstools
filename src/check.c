@@ -37,6 +37,7 @@
 #include "file.h"
 #include "lfn.h"
 #include "check.h"
+#include "boot.h"
 
 
 /* the longest path on the filesystem that can be handled by path_name() */
@@ -481,7 +482,8 @@ static int check_file(DOS_FS * fs, DOS_FILE * file)
 	    truncate_file(fs, file, clusters);
 	    break;
 	}
-	if ((owner = get_owner(fs, curr))) {
+	owner = get_owner(fs, curr);
+	if (owner && owner != FILE_ORPHAN) {
 	    int do_trunc = 0;
 	    printf("%s  and\n", path_name(owner));
 	    printf("%s\n  share clusters.\n", path_name(file));
@@ -996,6 +998,47 @@ int scan_root(DOS_FS * fs)
 }
 
 /**
+ * Scans a single new file or directory.
+ *
+ * @param[inout]    fs      Information about the filesystem
+ * @param[in]       de      Contents of the new directory entry
+ * @param[in]       offset  Byte offset of the new directory entry
+ *
+ * @return  0   Success
+ * @return  1   Error
+ */
+int scan_new_file(DOS_FS * fs, off_t offset)
+{
+    DOS_FILE **chain, **new_file, *parent;
+
+    if (offset < fs->data_start) {
+        parent = NULL;
+        chain = &root;
+    } else {
+        /* Inverse of cluster_start(). */
+        parent = get_owner(fs,
+                           (offset - fs->data_start) / fs->cluster_size + 2);
+        chain = &parent->first;
+    }
+
+    while(*chain)
+	chain = &(*chain)->next;
+
+    new_file = chain;
+
+    // TODO: Deal with this.
+    // new_dir(); // ?
+    add_file(fs, &chain, parent, offset, NULL);
+    // lfn_check_orphaned(); // ?
+    // If subdirs() doesn't work, add check_dir here. But subdirs() will
+    // probably work.
+    check_file(fs, *new_file);
+    // return subdirs(fs, *new_file, NULL);
+    return scan_dir(fs, *new_file, NULL);
+}
+
+
+/**
  * Assign the specified owner to all orphan chains (except cycles).
  * Break cross-links between orphan chains.
  *
@@ -1080,14 +1123,54 @@ static void finish_ents(DOS_FS * fs, DIR_ENT * ents, int ents_size,
     fs_write(cluster_start(fs, ents_cluster), fs->cluster_size, ents);
 }
 
+/* If this cluster is the head of an orphan chain... */
+static int orphan_head(DOS_FS * fs, uint32_t i, const uint32_t *num_refs)
+{
+    return get_owner(fs, i) == FILE_ORPHAN && !num_refs[i];
+}
+
+static int check_dot_entry(const DIR_ENT *de, const char *name)
+{
+    return
+	!memcmp(de->name, name, MSDOS_NAME) &&
+	(de->attr & (ATTR_DIR | ATTR_VOLUME)) == ATTR_DIR &&
+	!de->size;
+}
+
+static off_t alloc_fsck_dir(DOS_FS * fs, uint32_t *ents_cluster,
+                            DOS_FILE *owner)
+{
+    DIR_ENT de;
+    off_t offset = alloc_rootdir_entry(fs, &de, "FSCK%04dDIR", 1);
+    *ents_cluster = new_chain(fs, owner);
+    de.start = htole16(*ents_cluster & 0xffff);
+    de.starthi = htole16(*ents_cluster >> 16);
+    de.attr = ATTR_DIR;
+    fs_write(offset, sizeof(de), &de);
+    return offset;
+}
+
+static uint32_t de_start(const DIR_ENT *de, const DOS_FS * fs)
+{
+    /* See also FSTART(). */
+    uint32_t result = le16toh(de->start);
+    if (fs->fat_bits == 32)
+	result |= (uint32_t)le16toh(de->starthi) << 16;
+    return result;
+}
+
 /**
  * Recover orphan chains to files, handling any cycles or cross-links.
  *
  * @param[in,out]   fs             Information about the filesystem
  */
-void reclaim_file(DOS_FS * fs)
+void reclaim_file(DOS_FS * fs, int salvage_dirs)
 {
-    DOS_FILE orphan, fsck_dir;
+    static const DIR_ENT de_dots_base[2] = {
+	{MSDOS_DOT, ATTR_DIR},
+	{MSDOS_DOTDOT, ATTR_DIR}
+    };
+
     int reclaimed, files, ents_size;
     int changed = 0;
     uint32_t i, next, walk, ents_cluster = 0;
@@ -1131,7 +1214,7 @@ void reclaim_file(DOS_FS * fs)
      * and all cycles and cross-links are broken
      */
     do {
-	tag_free(fs, &orphan, num_refs, changed);
+	tag_free(fs, FILE_ORPHAN, num_refs, changed);
 	changed = 0;
 
 	/* Any unaccounted-for orphans must be part of a cycle */
@@ -1160,9 +1243,89 @@ void reclaim_file(DOS_FS * fs)
     /* Now we can start recovery */
     files = reclaimed = 0;
     ents = alloc(fs->cluster_size);
+
+    if (salvage_dirs) {
+	DIR_ENT *empty_dir = alloc(fs->cluster_size);
+	memcpy(empty_dir, de_dots_base, sizeof(de_dots_base));
+	memset(empty_dir + 2, 0, fs->cluster_size - sizeof(de_dots_base));
+
+	/* Lost directories get put together in a separate FSCK####.DIR. */
+	uint32_t alt_root_clus = 0;
+	i = 2;
+	while (i < total_num_clusters) {
+	    if (orphan_head(fs, i, num_refs)) {
+		DIR_ENT de_dots[2];
+		fs_read(cluster_start(fs, i), sizeof(de_dots), de_dots);
+		uint32_t parent = de_start(&de_dots[1], fs);
+		if (check_dot_entry(&de_dots[0], MSDOS_DOT) &&
+		    check_dot_entry(&de_dots[1], MSDOS_DOTDOT) &&
+		    de_start(&de_dots[0], fs) == i &&
+		    parent >= 2 &&
+		    parent < total_num_clusters) {
+
+		    DIR_ENT de;
+
+		    /* Go up as far as possible. */
+		    uint32_t dir_clus = i;
+
+		    /* If the parent directory doesn't actually contain the
+		     * child, that's OK. This process will repeat for the same
+		     * starting cluster until the chain is recovered.
+		     */
+		    for (;;) {
+			parent = de_start(&de_dots[1], fs);
+			if (parent < 2 ||
+			    parent >= total_num_clusters ||
+			    !orphan_head(fs, parent, num_refs) ||
+			    !check_dot_entry(&de_dots[1], MSDOS_DOTDOT))
+			    break;
+			dir_clus = parent;
+			fs_read(cluster_start(fs, dir_clus), sizeof(de_dots),
+			        de_dots);
+		    }
+
+		    if (!alt_root_clus) {
+			off_t de_offset;
+			de_offset = alloc_fsck_dir(fs, &alt_root_clus, NULL);
+			empty_dir[0].start = htole16(alt_root_clus);
+			empty_dir[0].starthi = htole16(alt_root_clus >> 16);
+			empty_dir[1].start = 0;
+			empty_dir[1].starthi = 0;
+			fs_write(cluster_start(fs, alt_root_clus),
+			         fs->cluster_size, empty_dir);
+			scan_new_file(fs, de_offset);
+		    }
+
+		    off_t offset = alloc_dir_entry(fs, &de, "FSCK%04dDIR", 1,
+		                                   alt_root_clus);
+		    de.attr = ATTR_DIR;
+		    de.start = htole16(dir_clus);
+		    de.starthi = htole16(dir_clus >> 16);
+		    fs_write(offset, sizeof(de), &de);
+
+		    if (check_dot_entry(&de_dots[1], MSDOS_DOTDOT)) {
+			de_dots[1].start = htole16(alt_root_clus);
+			de_dots[1].starthi = htole16(alt_root_clus >> 16);
+			fs_write(cluster_start(fs, dir_clus), sizeof(de_dots),
+			         de_dots);
+		    }
+
+		    scan_new_file(fs, offset); // TODO: Result!
+		    // TODO: Scan the directory with what's in check.c here.
+		    reclaimed++;
+		} else {
+		    i++;
+		}
+	    } else {
+		i++;
+	    }
+	}
+
+	free(empty_dir);
+    }
+
     for (i = 2; i < total_num_clusters; i++)
-	/* If this cluster is the head of an orphan chain... */
-	if (get_owner(fs, i) == &orphan && !num_refs[i]) {
+	if (orphan_head(fs, i, num_refs)) {
 	    uint32_t size;
 	    DIR_ENT *de_file;
 	    char expanded[12];
@@ -1171,16 +1334,9 @@ void reclaim_file(DOS_FS * fs)
 		    {MSDOS_DOT, ATTR_DIR},
 		    {MSDOS_DOTDOT, ATTR_DIR}
 		};
-		DIR_ENT de;
 		finish_ents(fs, ents, ents_size, ents_cluster);
-		off_t offset = alloc_rootdir_entry(fs, &de, "FSCK%04dDIR", 1);
-		ents_cluster = new_chain(fs, &fsck_dir);
+		alloc_fsck_dir(fs, &ents_cluster, FILE_FSCK_DIR);
 		ents_size = 2;
-		de.start = htole16(ents_cluster & 0xffff);
-		de.starthi = htole16(ents_cluster >> 16);
-		de.attr = ATTR_DIR;
-		fs_write(offset, sizeof(de), &de);
-
 		memcpy(ents, de_dots, sizeof(de_dots));
 		ents[0].start = htole16(ents_cluster & 0xffff);
 		ents[0].starthi = htole16(ents_cluster >> 16);

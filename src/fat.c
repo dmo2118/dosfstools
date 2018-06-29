@@ -304,11 +304,13 @@ off_t cluster_start(DOS_FS * fs, uint32_t cluster)
  */
 void set_owner(DOS_FS * fs, uint32_t cluster, DOS_FILE * owner)
 {
+    DOS_FILE *old_owner;
+
     if (fs->cluster_owner == NULL)
 	die("Internal error: attempt to set owner in non-existent table");
 
-    if (owner && fs->cluster_owner[cluster]
-	&& (fs->cluster_owner[cluster] != owner))
+    old_owner = fs->cluster_owner[cluster];
+    if (owner && old_owner && old_owner != FILE_ORPHAN && (old_owner != owner))
 	die("Internal error: attempt to change file owner");
     fs->cluster_owner[cluster] = owner;
 }
