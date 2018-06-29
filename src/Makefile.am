@@ -28,7 +28,9 @@ fscklabel_common_sources = boot.c boot.h common.c common.h \
 fsck_fat_SOURCES = check.c check.h file.c file.h fsck.fat.c \
 		   lfn.c lfn.h \
 		   $(fscklabel_common_sources)
+fsck_fat_LDADD   = $(LIBICONV)
 fatlabel_SOURCES = fatlabel.c $(fscklabel_common_sources)
+fatlabel_LDADD   = $(LIBICONV)
 
 mkfs_common_sources = device_info.c device_info.h \
 		      blkdev/blkdev.c blkdev/blkdev.h \

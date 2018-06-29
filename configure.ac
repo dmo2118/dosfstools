@@ -75,7 +75,7 @@ if test "x$with_udev" != "xno"; then
 		  [true])
 fi
 
-AC_SEARCH_LIBS(iconv_open, iconv)
+AM_ICONV
 
 # xxd (distributed with vim) is used in the testsuite
 AC_CHECK_PROG([XXD_FOUND], [xxd], [yes])
