@@ -80,6 +80,10 @@ static DOS_FILE *root;
     }									\
   } while(0)
 
+typedef struct {
+    uint32_t start, parent;
+} LOST_DIR;
+
 /**
  * Construct a full path (starting with '/') for the specified dentry,
  * relative to the partition. All components are "long" names where possible.
@@ -1159,6 +1163,38 @@ static uint32_t de_start(const DIR_ENT *de, const DOS_FS * fs)
     return result;
 }
 
+static void recover_dir(DOS_FS * fs, uint32_t dir_clus,
+                        uint32_t parent_dir_clus, int *reclaimed)
+{
+    DIR_ENT de, de_dots[2];
+    int dir_num = 0;
+    off_t offset = alloc_dir_entry(fs, &de, "FSCK%04dDIR", &dir_num,
+                                   parent_dir_clus);
+    de.attr = ATTR_DIR;
+    de.start = htole16(dir_clus);
+    de.starthi = htole16(dir_clus >> 16);
+    fs_write(offset, sizeof(de), &de);
+
+    fs_read(cluster_start(fs, dir_clus), sizeof(de_dots), de_dots);
+    if (check_dot_entry(&de_dots[1], MSDOS_DOTDOT)) {
+	de_dots[1].start = htole16(parent_dir_clus);
+	de_dots[1].starthi = htole16(parent_dir_clus >> 16);
+	fs_write(cluster_start(fs, dir_clus), sizeof(de_dots),
+	         de_dots);
+    }
+
+    if (scan_new_file(fs, offset)) // TODO: Handle result!
+	die ("Hmm. Well now what do we do?");
+    // TODO: Scan the directory with what's in check.c here.
+    (*reclaimed)++;
+}
+
+static void recover_dir_with_parent(DOS_FS * fs, LOST_DIR *lost_dir,
+                                    int *reclaimed)
+{
+    recover_dir (fs, lost_dir->start, lost_dir->parent, reclaimed);
+}
+
 /**
  * Recover orphan chains to files, handling any cycles or cross-links.
  *
@@ -1245,14 +1281,24 @@ void reclaim_file(DOS_FS * fs, int salvage_dirs)
     ents = alloc(fs->cluster_size);
 
     if (salvage_dirs) {
+	LOST_DIR *lost_dirs;
+	size_t lost_dir_count = 0;
 	DIR_ENT *empty_dir = alloc(fs->cluster_size);
+	uint32_t alt_root_clus = 0;
+
 	memcpy(empty_dir, de_dots_base, sizeof(de_dots_base));
 	memset(empty_dir + 2, 0, fs->cluster_size - sizeof(de_dots_base));
 
-	/* Lost directories get put together in a separate FSCK####.DIR. */
-	uint32_t alt_root_clus = 0;
-	i = 2;
-	while (i < total_num_clusters) {
+	for (i = 2; i < total_num_clusters; i++) {
+	    if (orphan_head(fs, i, num_refs))
+		lost_dir_count++;
+	}
+
+	lost_dirs = alloc(lost_dir_count * sizeof(LOST_DIR));
+	lost_dir_count = 0;
+
+	/* First, find likely directories. */
+	for (i = 2; i < total_num_clusters; i++) {
 	    if (orphan_head(fs, i, num_refs)) {
 		DIR_ENT de_dots[2];
 		fs_read(cluster_start(fs, i), sizeof(de_dots), de_dots);
@@ -1262,66 +1308,99 @@ void reclaim_file(DOS_FS * fs, int salvage_dirs)
 		    de_start(&de_dots[0], fs) == i &&
 		    parent >= 2 &&
 		    parent < total_num_clusters) {
-
-		    DIR_ENT de;
-
-		    /* Go up as far as possible. */
-		    uint32_t dir_clus = i;
-
-		    /* If the parent directory doesn't actually contain the
-		     * child, that's OK. This process will repeat for the same
-		     * starting cluster until the chain is recovered.
-		     */
-		    for (;;) {
-			parent = de_start(&de_dots[1], fs);
-			if (parent < 2 ||
-			    parent >= total_num_clusters ||
-			    !orphan_head(fs, parent, num_refs) ||
-			    !check_dot_entry(&de_dots[1], MSDOS_DOTDOT))
-			    break;
-			dir_clus = parent;
-			fs_read(cluster_start(fs, dir_clus), sizeof(de_dots),
-			        de_dots);
-		    }
-
-		    if (!alt_root_clus) {
-			off_t de_offset;
-			de_offset = alloc_fsck_dir(fs, &alt_root_clus, NULL);
-			empty_dir[0].start = htole16(alt_root_clus);
-			empty_dir[0].starthi = htole16(alt_root_clus >> 16);
-			empty_dir[1].start = 0;
-			empty_dir[1].starthi = 0;
-			fs_write(cluster_start(fs, alt_root_clus),
-			         fs->cluster_size, empty_dir);
-			scan_new_file(fs, de_offset);
-		    }
-
-		    off_t offset = alloc_dir_entry(fs, &de, "FSCK%04dDIR", 1,
-		                                   alt_root_clus);
-		    de.attr = ATTR_DIR;
-		    de.start = htole16(dir_clus);
-		    de.starthi = htole16(dir_clus >> 16);
-		    fs_write(offset, sizeof(de), &de);
-
-		    if (check_dot_entry(&de_dots[1], MSDOS_DOTDOT)) {
-			de_dots[1].start = htole16(alt_root_clus);
-			de_dots[1].starthi = htole16(alt_root_clus >> 16);
-			fs_write(cluster_start(fs, dir_clus), sizeof(de_dots),
-			         de_dots);
-		    }
-
-		    scan_new_file(fs, offset); // TODO: Result!
-		    // TODO: Scan the directory with what's in check.c here.
-		    reclaimed++;
-		} else {
-		    i++;
+		    lost_dirs[lost_dir_count].start = i;
+		    lost_dirs[lost_dir_count].parent = parent;
+		    lost_dir_count++;
 		}
-	    } else {
-		i++;
+	    }
+	}
+
+	/* Recover lost directories into their parents when possible. These get
+	 * inserted into the regular directory tree instead of being segregated
+	 * into some FSCK####.DIR in the root.
+	 *
+	 * If a directory has a parent directory that wasn't detected in the
+	 * previous pass (i.e. a bad sector wiped out the "." or ".." entries),
+	 * the lost directory may not end up as a child of its parent, even if
+	 * the parent is identified as a directory at some other point.
+	 */
+	for (;;) {
+	    uint32_t in;
+	    LOST_DIR *out = lost_dirs;
+
+	    for (in = 0; in != lost_dir_count; in++) {
+		if (get_owner(fs, lost_dirs[in].start) == FILE_ORPHAN) {
+		    uint32_t parent_clus = lost_dirs[in].parent;
+		    if (!parent_clus) {
+			recover_dir_with_parent(fs, &lost_dirs[in], &reclaimed);
+		    } else {
+			DOS_FILE *parent_file = get_owner(fs, parent_clus);
+			if (parent_file && parent_file != FILE_ORPHAN &&
+			    (parent_file->dir_ent.attr & (ATTR_VOLUME | ATTR_DIR)) == ATTR_DIR &&
+			    de_start(&parent_file->dir_ent, fs) == parent_clus) {
+			    recover_dir_with_parent(fs, &lost_dirs[in], &reclaimed);
+			} else {
+			    *out = lost_dirs[in];
+			    out++;
+			}
+		    }
+		}
+	    }
+
+	    lost_dir_count = out - lost_dirs;
+	    if (lost_dirs + in == out)
+		break;
+	};
+
+	/* Remaining lost directories get put together in a separate
+	 * FSCK####.DIR.
+	 */
+	for (i = 0; i != lost_dir_count; i++) {
+	    LOST_DIR *cur_dir = &lost_dirs[i];
+
+	    /* Go up as far as possible. */
+	    if (get_owner(fs, cur_dir->start) == FILE_ORPHAN) {
+		/* TODO: Directory loops! */
+		for (;;) {
+		    LOST_DIR *begin = lost_dirs;
+		    LOST_DIR *end = lost_dirs + lost_dir_count;
+		    /* lost_dirs is sorted by start. */
+		    while (begin != end) {
+			LOST_DIR *mid = begin + ((end - begin) >> 1);
+			if (cur_dir->parent > mid->start)
+			    begin = mid + 1;
+			else
+			    end = mid;
+		    }
+
+		    if (begin == lost_dirs + lost_dir_count ||
+		        begin->start != cur_dir->parent)
+			break;
+
+		    if (get_owner(fs, begin->start) != FILE_ORPHAN)
+			die ("Internal error. Aww."); // TODO.
+
+		    cur_dir = begin;
+		}
+
+		if (!alt_root_clus) {
+		    off_t de_offset;
+		    de_offset = alloc_fsck_dir(fs, &alt_root_clus, NULL);
+		    empty_dir[0].start = htole16(alt_root_clus);
+		    empty_dir[0].starthi = htole16(alt_root_clus >> 16);
+		    empty_dir[1].start = 0;
+		    empty_dir[1].starthi = 0;
+		    fs_write(cluster_start(fs, alt_root_clus),
+		             fs->cluster_size, empty_dir);
+		    scan_new_file(fs, de_offset);
+		}
+
+		recover_dir(fs, cur_dir->start, alt_root_clus, &reclaimed);
 	    }
 	}
 
 	free(empty_dir);
+	free(lost_dirs);
     }
 
     for (i = 2; i < total_num_clusters; i++)

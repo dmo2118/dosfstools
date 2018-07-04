@@ -49,14 +49,17 @@
 
 off_t alloc_rootdir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern, int gen_name)
 {
-    return alloc_dir_entry(fs, de, pattern, gen_name, fs->root_cluster);
+    static int curr_num = 0;
+    return alloc_dir_entry(fs, de, pattern, gen_name ? &curr_num : NULL,
+                           fs->root_cluster);
 }
 
 off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
-                      int gen_name, uint32_t dir_cluster)
+                      int *curr_num, uint32_t dir_cluster)
 {
-    static int curr_num = 0;
     off_t offset;
+    if (!dir_cluster)
+	dir_cluster = fs->root_cluster;
 
     if (dir_cluster) {
 	DIR_ENT d2;
@@ -94,10 +97,10 @@ off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
 		fs_write(offset + i, sizeof(d2), &d2);
 	}
 	memset(de, 0, sizeof(DIR_ENT));
-	if (gen_name) {
+	if (curr_num) {
 	    while (1) {
 		char expanded[12];
-		sprintf(expanded, pattern, curr_num);
+		sprintf(expanded, pattern, *curr_num);
 		memcpy(de->name, expanded, MSDOS_NAME);
 		clu_num = dir_cluster;
 		i = 0;
@@ -119,7 +122,7 @@ off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
 		}
 		if (clu_num == 0 || clu_num == -1)
 		    break;
-		if (++curr_num >= 10000)
+		if (++*curr_num >= 10000)
 		    die("Unable to create unique name");
 	    }
 	} else {
@@ -142,10 +145,10 @@ off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
 	    die("Root directory is full.");
 	offset = fs->root_start + next_free * sizeof(DIR_ENT);
 	memset(de, 0, sizeof(DIR_ENT));
-	if (gen_name) {
+	if (curr_num) {
 	    while (1) {
 		char expanded[12];
-		sprintf(expanded, pattern, curr_num);
+		sprintf(expanded, pattern, *curr_num);
 		memcpy(de->name, expanded, MSDOS_NAME);
 		for (scan = 0; scan < fs->root_entries; scan++)
 		    if (scan != next_free &&
@@ -154,7 +157,7 @@ off_t alloc_dir_entry(DOS_FS * fs, DIR_ENT * de, const char *pattern,
 			break;
 		if (scan == fs->root_entries)
 		    break;
-		if (++curr_num >= 10000)
+		if (++*curr_num >= 10000)
 		    die("Unable to create unique name");
 	    }
 	} else {
